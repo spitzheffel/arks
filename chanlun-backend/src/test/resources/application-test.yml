@@ -1,0 +1,31 @@
+# 测试环境配置
+# 使用 H2 内存数据库进行单元测试
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  flyway:
+    enabled: false
+
+  h2:
+    console:
+      enabled: false
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+app:
+  encryption:
+    key: test-encryption-key-32-bytes-ok
+  exchange:
+    api-mock: true
+
+logging:
+  level:
+    root: WARN
+    com.chanlun: DEBUG

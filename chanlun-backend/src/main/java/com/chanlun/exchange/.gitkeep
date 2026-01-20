@@ -1,0 +1,7 @@
+# 交易所客户端目录
+# - ExchangeClient.java (交易所客户端接口)
+# - binance/ (币安客户端实现)
+#   - BinanceClient.java
+#   - BinanceSpotClient.java
+#   - BinanceFuturesClient.java
+# - model/ (交易所数据模型)

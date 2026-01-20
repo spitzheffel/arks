@@ -1,0 +1,7 @@
+# Service层目录
+# - DataSourceService.java (数据源服务)
+# - MarketService.java (市场服务)
+# - SymbolService.java (交易对服务)
+# - KlineService.java (K线数据服务)
+# - SyncService.java (同步服务)
+# - GapService.java (缺口服务)

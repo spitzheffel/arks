@@ -2,7 +2,7 @@
 
 ## 技术栈
 
-- **后端**: Java 17+ / Spring Boot 3.x / MyBatis-Plus
+- **后端**: Java 21 / Spring Boot 3.x / MyBatis-Plus
 - **前端**: Vue 3 + TypeScript + Tailwind CSS + ECharts
 - **数据库**: PostgreSQL 15+
 - **缓存**: Redis (可选，后续扩展)
@@ -167,6 +167,10 @@
 | created_at | TIMESTAMPTZ | 创建时间 (UTC) |
 | updated_at | TIMESTAMPTZ | 更新时间 (UTC) |
 
+**说明**:
+- 同步任务用于记录实时/历史/缺口回补执行记录
+- 缺口回补（手动/自动）必须创建 sync_task，task_type=GAP_FILL
+
 ### 7. 同步状态表 (sync_status)
 
 | 字段 | 类型 | 说明 |
@@ -175,12 +179,22 @@
 | symbol_id | BIGINT | 交易对ID (外键) |
 | interval | VARCHAR(10) | 时间周期 |
 | last_sync_time | TIMESTAMPTZ | 最后同步时间 (UTC) |
-| last_kline_time | TIMESTAMPTZ | 最后一根K线的开盘时间 (UTC) |
+| last_kline_time | TIMESTAMPTZ | 最后一根K线的开盘时间 (UTC)，无数据时为 NULL |
 | total_klines | BIGINT | 总K线数量 |
+| auto_gap_fill_enabled | BOOLEAN | 该周期自动回补开关 (默认 true) |
 | created_at | TIMESTAMPTZ | 创建时间 (UTC) |
 | updated_at | TIMESTAMPTZ | 更新时间 (UTC) |
 
 **索引**: (symbol_id, interval) UNIQUE
+
+**说明**:
+- `last_kline_time` 为 NULL 表示该周期无K线数据
+- 历史/实时/缺口回补成功后更新 `last_sync_time`
+- `last_kline_time` 更新为当前值与本次写入最大 `open_time` 取 max
+- `total_klines` 按新增写入数量增量更新（删除后由删除逻辑重算）
+- 手动删除历史数据后需重算 `last_kline_time` 与 `total_klines`
+- `auto_gap_fill_enabled` 用于控制该交易对该周期是否参与自动缺口回补
+- 手动删除历史数据后，系统自动将 `auto_gap_fill_enabled` 设为 false，需用户手动开启
 
 ### 8. 系统配置表 (system_config)
 
@@ -194,6 +208,187 @@
 | updated_at | TIMESTAMPTZ | 更新时间 (UTC) |
 
 **索引**: (config_key) UNIQUE
+
+### 实体关系图 (ER Diagram)
+
+```mermaid
+erDiagram
+    DATA_SOURCE ||--o{ MARKET : contains
+    MARKET ||--o{ SYMBOL : contains
+    SYMBOL ||--o{ KLINE : has
+    SYMBOL ||--o{ DATA_GAP : has
+    SYMBOL ||--o{ SYNC_TASK : has
+    SYMBOL ||--o{ SYNC_STATUS : has
+
+    DATA_SOURCE {
+        bigint id PK
+        varchar name
+        varchar exchange_type
+        varchar api_key "加密存储"
+        varchar secret_key "加密存储"
+        boolean proxy_enabled
+        boolean enabled
+        boolean deleted
+        timestamptz created_at
+    }
+
+    MARKET {
+        bigint id PK
+        bigint data_source_id FK
+        varchar name
+        varchar market_type "SPOT/USDT_M/COIN_M"
+        boolean enabled
+        timestamptz created_at
+    }
+
+    SYMBOL {
+        bigint id PK
+        bigint market_id FK
+        varchar symbol "BTCUSDT"
+        boolean realtime_sync_enabled
+        boolean history_sync_enabled
+        varchar sync_intervals "1m,5m,1h"
+        varchar status "TRADING/HALT"
+        timestamptz created_at
+    }
+
+    KLINE {
+        bigint id PK
+        bigint symbol_id FK
+        varchar interval "1m/1h/1d..."
+        timestamptz open_time
+        decimal open
+        decimal high
+        decimal low
+        decimal close
+        decimal volume
+        timestamptz created_at
+    }
+
+    DATA_GAP {
+        bigint id PK
+        bigint symbol_id FK
+        varchar interval
+        timestamptz gap_start
+        timestamptz gap_end
+        varchar status "PENDING/FILLING/FILLED/FAILED"
+        int retry_count
+        timestamptz created_at
+    }
+
+    SYNC_TASK {
+        bigint id PK
+        bigint symbol_id FK
+        varchar interval
+        varchar task_type "REALTIME/HISTORY/GAP_FILL"
+        varchar status "PENDING/RUNNING/SUCCESS/FAILED"
+        int synced_count
+        timestamptz created_at
+    }
+
+    SYNC_STATUS {
+        bigint id PK
+        bigint symbol_id FK
+        varchar interval
+        timestamptz last_sync_time
+        timestamptz last_kline_time "可为NULL"
+        bigint total_klines
+        boolean auto_gap_fill_enabled
+        timestamptz created_at
+    }
+
+    SYSTEM_CONFIG {
+        bigint id PK
+        varchar config_key UK
+        text config_value
+        varchar description
+        timestamptz created_at
+    }
+```
+
+### 状态机图 (State Diagrams)
+
+#### 数据缺口状态流转
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING : 检测到缺口
+    PENDING --> FILLING : 开始回补
+    FILLING --> FILLED : 回补成功
+    FILLING --> FAILED : 回补失败(达到最大重试)
+    FILLING --> PENDING : 回补失败(可重试)
+    FAILED --> PENDING : 手动重置
+    FILLED --> [*]
+```
+
+#### 同步任务状态流转
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING : 创建任务
+    PENDING --> RUNNING : 开始执行
+    RUNNING --> SUCCESS : 执行成功
+    RUNNING --> FAILED : 执行失败
+    FAILED --> PENDING : 重试
+    SUCCESS --> [*]
+```
+
+#### 数据源/市场/交易对启用状态级联
+
+```mermaid
+stateDiagram-v2
+    state 数据源 {
+        [*] --> DS_ENABLED
+        DS_ENABLED --> DS_DISABLED : 禁用
+        DS_DISABLED --> DS_ENABLED : 启用
+        DS_ENABLED --> DS_DELETED : 软删除
+    }
+
+    state 市场 {
+        [*] --> MKT_ENABLED
+        MKT_ENABLED --> MKT_DISABLED : 禁用/级联禁用
+        MKT_DISABLED --> MKT_ENABLED : 启用
+    }
+
+    state 交易对同步 {
+        [*] --> SYM_DISABLED : 默认关闭
+        SYM_DISABLED --> SYM_ENABLED : 手动开启
+        SYM_ENABLED --> SYM_DISABLED : 禁用/级联禁用
+    }
+
+    DS_DISABLED --> MKT_DISABLED : 级联
+    DS_DELETED --> MKT_DISABLED : 级联
+    MKT_DISABLED --> SYM_DISABLED : 级联
+```
+
+#### 历史数据同步流程
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant API as 后端API
+    participant Service as SyncService
+    participant Binance as 币安API
+    participant DB as PostgreSQL
+
+    User->>API: POST /sync/symbols/{id}/history
+    API->>Service: 触发历史同步
+    Service->>Service: 校验数据源/市场/交易对启用状态
+    alt 校验失败
+        Service-->>API: 返回错误
+    else 校验通过
+        Service->>DB: 创建 SYNC_TASK (PENDING)
+        Service->>DB: 更新状态为 RUNNING
+        loop 分段拉取 (≤30天/次)
+            Service->>Binance: GET /api/v3/klines
+            Binance-->>Service: K线数据
+            Service->>DB: 批量插入/更新 KLINE
+        end
+        Service->>DB: 更新 SYNC_STATUS
+        Service->>DB: 更新 SYNC_TASK (SUCCESS)
+        Service-->>API: 返回成功
+    end
+```
 
 **预置配置项**:
 
@@ -291,7 +486,6 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /api/v1/sync/tasks | 获取同步任务列表 |
-| GET | /api/v1/sync/status | 获取同步状态列表 |
 | POST | /api/v1/sync/symbols/{id}/history | 触发历史同步 |
 
 **GET /api/v1/sync/tasks 查询参数**:
@@ -307,6 +501,8 @@
   "endTime": "2025-01-15T00:00:00Z"
 }
 ```
+
+**说明**: `startTime` 与 `endTime` 为必填，且 `startTime` < `endTime`
 
 ### 5. K线数据 API
 
@@ -354,7 +550,19 @@
 }
 ```
 
-### 7. 系统配置 API
+### 7. 同步状态 API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/v1/sync/status | 获取同步状态列表 |
+| PATCH | /api/v1/sync/status/{id}/auto-gap-fill | 开启/关闭该周期自动回补 |
+
+**PATCH /api/v1/sync/status/{id}/auto-gap-fill 请求体**:
+```json
+{ "enabled": true }
+```
+
+### 8. 系统配置 API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -586,7 +794,7 @@ OkHttpClient client = new OkHttpClient.Builder()
 
 **Cron 时区**: 所有定时任务按 UTC 执行，SchedulerConfig 统一设置时区为 UTC。
 
-**实时K线同步**: 通过 WebSocket 推送，不依赖定时任务。WebSocket 断连时自动重连并通过 REST API 补充缺失数据。
+**实时K线同步**: 通过 WebSocket 推送，不依赖定时任务。WebSocket 断连时自动重连并通过 REST API 补充缺失数据。`sync.realtime.enabled=false` 时立即断开已有 WebSocket 订阅并停止新订阅。
 
 **历史数据同步**: 支持两种方式：
 1. 手动触发：用户指定时间范围拉取

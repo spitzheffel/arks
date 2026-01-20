@@ -1,0 +1,6 @@
+# 实体类目录
+# - DataSource.java (数据源)
+# - Market.java (市场)
+# - Symbol.java (交易对)
+# - Kline.java (K线数据)
+# - DataGap.java (数据缺口)
