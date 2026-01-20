@@ -267,9 +267,14 @@ public class SymbolService {
 
     /**
      * 获取启用了历史同步的交易对列表
+     * 
+     * 仅返回：
+     * - 历史同步已启用
+     * - 所属市场已启用
+     * - 所属数据源已启用且未删除
      */
     public List<SymbolDTO> getHistorySyncEnabled() {
-        return symbolMapper.selectHistorySyncEnabled().stream()
+        return symbolMapper.selectHistorySyncEnabledWithValidDataSource().stream()
                 .map(this::toDTO)
                 .toList();
     }
