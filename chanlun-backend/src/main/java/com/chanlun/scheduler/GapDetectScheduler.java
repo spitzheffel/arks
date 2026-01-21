@@ -2,6 +2,8 @@ package com.chanlun.scheduler;
 
 import com.chanlun.dto.GapDetectResult;
 import com.chanlun.service.DataGapService;
+import com.chanlun.service.GapFillService;
+import com.chanlun.service.GapFillService.BatchGapFillResult;
 import com.chanlun.service.SystemConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +30,7 @@ import org.springframework.stereotype.Component;
 public class GapDetectScheduler {
 
     private final DataGapService dataGapService;
+    private final GapFillService gapFillService;
     private final SystemConfigService systemConfigService;
 
     /**
@@ -86,5 +89,67 @@ public class GapDetectScheduler {
      */
     public long getPendingGapCount() {
         return dataGapService.countPending();
+    }
+
+    /**
+     * 自动缺口回补定时任务
+     * 
+     * 在缺口检测后执行，自动回补符合条件的缺口
+     * 需要全局开关 sync.gap_fill.auto = true 才会执行
+     * 
+     * 执行逻辑：
+     * 1. 检查全局自动回补开关
+     * 2. 获取待回补的缺口（按批量大小限制）
+     * 3. 检查每个缺口的周期级自动回补开关
+     * 4. 执行回补并更新状态
+     */
+    @Scheduled(cron = "${app.sync.gap-fill.cron:0 5 * * * ?}", zone = "UTC")
+    public void executeAutoGapFill() {
+        log.info("Auto gap fill scheduler triggered");
+        
+        try {
+            // 检查全局开关
+            if (!systemConfigService.isAutoGapFillEnabled()) {
+                log.debug("Auto gap fill is disabled globally, skipping");
+                return;
+            }
+            
+            log.info("Starting scheduled auto gap fill");
+            BatchGapFillResult result = gapFillService.autoFillGaps();
+            
+            if (result.isDisabled()) {
+                log.info("Auto gap fill skipped: {}", result.getMessage());
+                return;
+            }
+            
+            log.info("Scheduled auto gap fill completed: total={}, success={}, failed={}, skipped={}, klines={}",
+                    result.getTotalCount(),
+                    result.getSuccessCount(),
+                    result.getFailureCount(),
+                    result.getSkippedCount(),
+                    result.getTotalSyncedKlines());
+            
+        } catch (Exception e) {
+            log.error("Scheduled auto gap fill failed: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 手动触发自动缺口回补
+     * 
+     * @return 回补结果
+     */
+    public BatchGapFillResult triggerManualAutoFill() {
+        log.info("Manual auto gap fill triggered");
+        return gapFillService.autoFillGaps();
+    }
+
+    /**
+     * 检查自动缺口回补是否启用
+     * 
+     * @return 是否启用
+     */
+    public boolean isAutoGapFillEnabled() {
+        return systemConfigService.isAutoGapFillEnabled();
     }
 }

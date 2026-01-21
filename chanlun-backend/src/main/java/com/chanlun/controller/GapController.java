@@ -4,6 +4,9 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.chanlun.dto.*;
 import com.chanlun.exception.BusinessException;
 import com.chanlun.service.DataGapService;
+import com.chanlun.service.GapFillService;
+import com.chanlun.service.GapFillService.BatchGapFillResult;
+import com.chanlun.service.GapFillService.GapFillResult;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +14,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -29,6 +33,7 @@ import java.util.Map;
 public class GapController {
 
     private final DataGapService dataGapService;
+    private final GapFillService gapFillService;
 
     /**
      * 默认每页数量
@@ -133,5 +138,66 @@ public class GapController {
                 request.getInterval());
         
         return ApiResponse.success(result);
+    }
+
+    // ==================== 缺口回补 API ====================
+
+    /**
+     * 回补单个缺口
+     * 
+     * POST /api/v1/gaps/{id}/fill
+     * 
+     * @param id 缺口ID
+     * @return 回补结果
+     */
+    @PostMapping("/{id}/fill")
+    public ApiResponse<GapFillResult> fillGap(@PathVariable Long id) {
+        log.info("Gap fill request: gapId={}", id);
+        
+        GapFillResult result = gapFillService.fillGap(id);
+        
+        if (result.isSuccess()) {
+            return ApiResponse.success(result);
+        } else {
+            return ApiResponse.error(500, result.getMessage(), result);
+        }
+    }
+
+    /**
+     * 批量回补缺口
+     * 
+     * POST /api/v1/gaps/batch-fill
+     * 
+     * @param request 批量回补请求（包含缺口ID列表）
+     * @return 批量回补结果
+     */
+    @PostMapping("/batch-fill")
+    public ApiResponse<BatchGapFillResult> batchFillGaps(@RequestBody Map<String, List<Long>> request) {
+        List<Long> gapIds = request.get("gapIds");
+        
+        if (gapIds == null || gapIds.isEmpty()) {
+            throw new BusinessException("缺口ID列表不能为空");
+        }
+        
+        log.info("Batch gap fill request: gapIds={}", gapIds);
+        
+        BatchGapFillResult result = gapFillService.batchFillGaps(gapIds);
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 重置失败的缺口状态
+     * 
+     * POST /api/v1/gaps/{id}/reset
+     * 
+     * @param id 缺口ID
+     * @return 重置后的缺口
+     */
+    @PostMapping("/{id}/reset")
+    public ApiResponse<DataGapDTO> resetFailedGap(@PathVariable Long id) {
+        log.info("Reset failed gap request: gapId={}", id);
+        
+        DataGapDTO gap = gapFillService.resetFailedGap(id);
+        return ApiResponse.success(gap);
     }
 }

@@ -2,9 +2,12 @@ package com.chanlun.scheduler;
 
 import com.chanlun.dto.GapDetectResult;
 import com.chanlun.service.DataGapService;
+import com.chanlun.service.GapFillService;
+import com.chanlun.service.GapFillService.BatchGapFillResult;
 import com.chanlun.service.SystemConfigService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -24,6 +27,9 @@ class GapDetectSchedulerTest {
 
     @Mock
     private DataGapService dataGapService;
+
+    @Mock
+    private GapFillService gapFillService;
 
     @Mock
     private SystemConfigService systemConfigService;
@@ -108,5 +114,67 @@ class GapDetectSchedulerTest {
         long count = gapDetectScheduler.getPendingGapCount();
 
         assertEquals(0L, count);
+    }
+
+    @Nested
+    @DisplayName("自动缺口回补测试")
+    class AutoGapFillTest {
+
+        @Test
+        @DisplayName("执行自动回补 - 全局开关关闭时跳过")
+        void executeAutoGapFill_GlobalDisabled() {
+            when(systemConfigService.isAutoGapFillEnabled()).thenReturn(false);
+
+            gapDetectScheduler.executeAutoGapFill();
+
+            verify(gapFillService, never()).autoFillGaps();
+        }
+
+        @Test
+        @DisplayName("执行自动回补 - 正常执行")
+        void executeAutoGapFill_Success() {
+            when(systemConfigService.isAutoGapFillEnabled()).thenReturn(true);
+            BatchGapFillResult result = new BatchGapFillResult();
+            result.addSuccess(GapFillService.GapFillResult.success(1L, 10, "成功"));
+            when(gapFillService.autoFillGaps()).thenReturn(result);
+
+            gapDetectScheduler.executeAutoGapFill();
+
+            verify(gapFillService).autoFillGaps();
+        }
+
+        @Test
+        @DisplayName("执行自动回补 - 异常处理")
+        void executeAutoGapFill_ExceptionHandling() {
+            when(systemConfigService.isAutoGapFillEnabled()).thenReturn(true);
+            when(gapFillService.autoFillGaps()).thenThrow(new RuntimeException("回补错误"));
+
+            assertDoesNotThrow(() -> gapDetectScheduler.executeAutoGapFill());
+        }
+
+        @Test
+        @DisplayName("手动触发自动回补")
+        void triggerManualAutoFill() {
+            BatchGapFillResult expectedResult = new BatchGapFillResult();
+            expectedResult.addSuccess(GapFillService.GapFillResult.success(1L, 5, "成功"));
+            when(gapFillService.autoFillGaps()).thenReturn(expectedResult);
+
+            BatchGapFillResult result = gapDetectScheduler.triggerManualAutoFill();
+
+            assertNotNull(result);
+            assertEquals(1, result.getSuccessCount());
+        }
+
+        @Test
+        @DisplayName("检查自动回补是否启用")
+        void isAutoGapFillEnabled() {
+            when(systemConfigService.isAutoGapFillEnabled()).thenReturn(true);
+
+            assertTrue(gapDetectScheduler.isAutoGapFillEnabled());
+
+            when(systemConfigService.isAutoGapFillEnabled()).thenReturn(false);
+
+            assertFalse(gapDetectScheduler.isAutoGapFillEnabled());
+        }
     }
 }
