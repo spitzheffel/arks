@@ -31,6 +31,6 @@ public interface DataSourceMapper extends BaseMapper<DataSource> {
     /**
      * 检查名称是否已存在（排除指定ID）
      */
-    @Select("SELECT COUNT(*) FROM data_source WHERE name = #{name} AND deleted = false AND (#{id} IS NULL OR id != #{id})")
+    @Select("SELECT COUNT(*) FROM data_source WHERE name = #{name} AND deleted = false AND (CAST(#{id} AS BIGINT) IS NULL OR id != #{id})")
     int countByNameExcludeId(@Param("name") String name, @Param("id") Long id);
 }

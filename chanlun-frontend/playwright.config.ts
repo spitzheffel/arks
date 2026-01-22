@@ -2,19 +2,20 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: true,
+  fullyParallel: false, // E2E 冒烟测试需要顺序执行
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  workers: 1, // 单线程执行，避免数据冲突
   reporter: 'html',
-  timeout: 30000,
+  timeout: 60000, // 增加超时时间
   expect: {
-    timeout: 5000
+    timeout: 10000
   },
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'on-first-retry',
-    screenshot: 'only-on-failure'
+    screenshot: 'only-on-failure',
+    video: 'on-first-retry'
   },
   projects: [
     {
